@@ -9,7 +9,8 @@ import {
   Database,
   Info,
   Plug,
-  Globe
+  Globe,
+  Cloud
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { shouldShowAboutBlueDot, UPDATE_AVAILABILITY_EVENT, checkForUpdatesSilently } from '@/lib/update/update-notifier';
@@ -18,6 +19,7 @@ const settingsTabs = [
   { id: 'general', name: '常规', icon: SlidersHorizontal },
   { id: 'localModels', name: 'AI模型', icon: Bot },
   { id: 'knowledgeBase', name: '知识库', icon: Database },
+  { id: 'sync', name: '同步', icon: Cloud },
   { id: 'webSearch', name: '网络搜索', icon: Globe },
   { id: 'mcpServers', name: 'MCP 服务器', icon: Plug },
   { id: 'privacySecurity', name: '安全', icon: ShieldCheck },

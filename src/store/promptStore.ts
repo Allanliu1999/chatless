@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
 import { DatabaseService } from '@/lib/database/services/DatabaseService';
 import type { PromptItem } from '@/types/prompt';
+import { getOrCreateSyncDeviceId } from '@/lib/sync/deviceId';
 
 interface PromptState {
   prompts: PromptItem[];
@@ -39,22 +40,24 @@ export const usePromptStore = create<PromptState & PromptActions>()(
         try {
           const repo = DatabaseService.getInstance().getPromptRepository();
           const rows: any[] = await repo.findAll();
-          const mapped: PromptItem[] = rows.map((r: any) => ({
-            id: r.id,
-            name: r.name,
-            description: r.description || '',
-            content: r.content,
-            tags: JSON.parse(r.tags || '[]'),
-            languages: JSON.parse(r.languages || '[]'),
-            modelHints: JSON.parse(r.model_hints || '[]'),
-            variables: JSON.parse(r.variables || '[]'),
-            shortcuts: JSON.parse(r.shortcuts || '[]'),
-            favorite: !!r.favorite,
-            createdAt: r.created_at,
-            updatedAt: r.updated_at,
-            externalId: r.external_id || undefined,
-            stats: JSON.parse(r.stats || '{"uses":0}')
-          }));
+          const mapped: PromptItem[] = rows
+            .filter((r: any) => !r.deleted_at)
+            .map((r: any) => ({
+              id: r.id,
+              name: r.name,
+              description: r.description || '',
+              content: r.content,
+              tags: JSON.parse(r.tags || '[]'),
+              languages: JSON.parse(r.languages || '[]'),
+              modelHints: JSON.parse(r.model_hints || '[]'),
+              variables: JSON.parse(r.variables || '[]'),
+              shortcuts: JSON.parse(r.shortcuts || '[]'),
+              favorite: !!r.favorite,
+              createdAt: r.created_at,
+              updatedAt: r.updated_at,
+              externalId: r.external_id || undefined,
+              stats: JSON.parse(r.stats || '{"uses":0}'),
+            }));
           set({ prompts: mapped });
         } catch (e) {
           // 忽略加载失败，保持内存数据
@@ -85,29 +88,35 @@ export const usePromptStore = create<PromptState & PromptActions>()(
         // 异步持久化到数据库
         try {
           const repo = DatabaseService.getInstance().getPromptRepository();
-          repo.create({
-            id: prompt.id,
-            name: prompt.name,
-            description: prompt.description,
-            content: prompt.content,
-            tags: JSON.stringify(prompt.tags || []),
-            languages: JSON.stringify(prompt.languages || []),
-            model_hints: JSON.stringify(prompt.modelHints || []),
-            variables: JSON.stringify(prompt.variables || []),
-            shortcuts: JSON.stringify(prompt.shortcuts || []),
-            favorite: prompt.favorite ? 1 : 0,
-            created_at: prompt.createdAt,
-            updated_at: prompt.updatedAt,
-            external_id: prompt.externalId || null,
-            stats: JSON.stringify(prompt.stats || { uses: 0 }),
-          } as any).catch(()=>{});
+          void (async () => {
+            const deviceId = await getOrCreateSyncDeviceId();
+            await repo.create({
+              id: prompt.id,
+              name: prompt.name,
+              description: prompt.description,
+              content: prompt.content,
+              tags: JSON.stringify(prompt.tags || []),
+              languages: JSON.stringify(prompt.languages || []),
+              model_hints: JSON.stringify(prompt.modelHints || []),
+              variables: JSON.stringify(prompt.variables || []),
+              shortcuts: JSON.stringify(prompt.shortcuts || []),
+              favorite: prompt.favorite ? 1 : 0,
+              created_at: prompt.createdAt,
+              updated_at: prompt.updatedAt,
+              external_id: prompt.externalId || null,
+              stats: JSON.stringify(prompt.stats || { uses: 0 }),
+              deleted_at: null,
+              updated_by_device_id: deviceId,
+            } as any).catch(() => {});
+          })();
         } catch {}
         return id;
       },
 
       updatePrompt: (id, updates) => {
+        const now = Date.now();
         set((state) => ({
-          prompts: state.prompts.map((p) => (p.id === id ? { ...p, ...updates, updatedAt: Date.now() } : p)),
+          prompts: state.prompts.map((p) => (p.id === id ? { ...p, ...updates, updatedAt: now } : p)),
         }));
         try {
           const repo = DatabaseService.getInstance().getPromptRepository();
@@ -121,13 +130,24 @@ export const usePromptStore = create<PromptState & PromptActions>()(
           if ('shortcuts' in toUpdate) { toUpdate.shortcuts = JSON.stringify(normalizeShortcuts(toUpdate.shortcuts)); }
           if (typeof toUpdate.favorite === 'boolean') { toUpdate.favorite = toUpdate.favorite ? 1 : 0; }
           if ('stats' in toUpdate) { toUpdate.stats = JSON.stringify(toUpdate.stats || {}); }
-          repo.update(id, toUpdate).catch(()=>{});
+          toUpdate.updated_at = now;
+          void (async () => {
+            const deviceId = await getOrCreateSyncDeviceId();
+            await repo.update(id, { ...toUpdate, updated_by_device_id: deviceId } as any).catch(() => {});
+          })();
         } catch {}
       },
 
       deletePrompt: (id) => {
         set((state) => ({ prompts: state.prompts.filter((p) => p.id !== id) }));
-         try { DatabaseService.getInstance().getPromptRepository().delete(id).catch(()=>{});} catch {}
+        try {
+          const repo = DatabaseService.getInstance().getPromptRepository();
+          const now = Date.now();
+          void (async () => {
+            const deviceId = await getOrCreateSyncDeviceId();
+            await repo.update(id, { deleted_at: now, updated_at: now, updated_by_device_id: deviceId } as any).catch(() => {});
+          })();
+        } catch {}
       },
 
       importPrompts: (items) => {
@@ -174,22 +194,27 @@ export const usePromptStore = create<PromptState & PromptActions>()(
               created++;
               try {
                 const repo = DatabaseService.getInstance().getPromptRepository();
-                repo.create({
-                  id: prompt.id,
-                  name: prompt.name,
-                  description: prompt.description,
-                  content: prompt.content,
-                  tags: JSON.stringify(prompt.tags || []),
-                  languages: JSON.stringify(prompt.languages || []),
-                  model_hints: JSON.stringify(prompt.modelHints || []),
-                  variables: JSON.stringify(prompt.variables || []),
-                shortcuts: JSON.stringify(prompt.shortcuts || []),
-                  favorite: prompt.favorite ? 1 : 0,
-                  created_at: prompt.createdAt,
-                  updated_at: prompt.updatedAt,
-                  external_id: prompt.externalId || null,
-                  stats: JSON.stringify(prompt.stats || { uses: 0 }),
-                } as any).catch(()=>{});
+                void (async () => {
+                  const deviceId = await getOrCreateSyncDeviceId();
+                  await repo.create({
+                    id: prompt.id,
+                    name: prompt.name,
+                    description: prompt.description,
+                    content: prompt.content,
+                    tags: JSON.stringify(prompt.tags || []),
+                    languages: JSON.stringify(prompt.languages || []),
+                    model_hints: JSON.stringify(prompt.modelHints || []),
+                    variables: JSON.stringify(prompt.variables || []),
+                    shortcuts: JSON.stringify(prompt.shortcuts || []),
+                    favorite: prompt.favorite ? 1 : 0,
+                    created_at: prompt.createdAt,
+                    updated_at: prompt.updatedAt,
+                    external_id: prompt.externalId || null,
+                    stats: JSON.stringify(prompt.stats || { uses: 0 }),
+                    deleted_at: null,
+                    updated_by_device_id: deviceId,
+                  } as any).catch(() => {});
+                })();
               } catch {}
             }
           }
@@ -201,25 +226,35 @@ export const usePromptStore = create<PromptState & PromptActions>()(
       exportPrompts: () => get().prompts,
 
       toggleFavorite: (id) => {
+        const now = Date.now();
         set((state) => ({
-          prompts: state.prompts.map((p) => (p.id === id ? { ...p, favorite: !p.favorite } : p)),
+          prompts: state.prompts.map((p) => (p.id === id ? { ...p, favorite: !p.favorite, updatedAt: now } : p)),
         }));
         try {
           const cur = get().prompts.find(p=>p.id===id);
           if (cur) {
-            DatabaseService.getInstance().getPromptRepository().update(id, { favorite: cur.favorite ? 1 : 0 } as any).catch(()=>{});
+            const repo = DatabaseService.getInstance().getPromptRepository();
+            void (async () => {
+              const deviceId = await getOrCreateSyncDeviceId();
+              await repo.update(id, { favorite: cur.favorite ? 1 : 0, updated_at: now, updated_by_device_id: deviceId } as any).catch(()=>{});
+            })();
           }
         } catch {}
       },
 
       touchUsage: (id) => {
+        const now = Date.now();
         set((state) => ({
-          prompts: state.prompts.map((p) => (p.id === id ? { ...p, stats: { uses: (p.stats?.uses || 0) + 1, lastUsedAt: Date.now() } } : p)),
+          prompts: state.prompts.map((p) => (p.id === id ? { ...p, stats: { uses: (p.stats?.uses || 0) + 1, lastUsedAt: now }, updatedAt: now } : p)),
         }));
         try {
           const cur = get().prompts.find(p=>p.id===id);
           if (cur) {
-            DatabaseService.getInstance().getPromptRepository().update(id, { stats: JSON.stringify(cur.stats || { uses: 0 }) } as any).catch(()=>{});
+            const repo = DatabaseService.getInstance().getPromptRepository();
+            void (async () => {
+              const deviceId = await getOrCreateSyncDeviceId();
+              await repo.update(id, { stats: JSON.stringify(cur.stats || { uses: 0 }), updated_at: now, updated_by_device_id: deviceId } as any).catch(()=>{});
+            })();
           }
         } catch {}
       },
@@ -232,4 +267,3 @@ export const usePromptStore = create<PromptState & PromptActions>()(
     { name: 'prompt-store' }
   )
 );
-
