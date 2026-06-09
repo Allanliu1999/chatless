@@ -567,6 +567,7 @@ export function ChatInput({
   };
 
   const [attachedImages, setAttachedImages] = useState<{ name: string; dataUrl: string; base64Data: string; fileSize: number }[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -680,31 +681,87 @@ export function ChatInput({
         setTimeout(()=>{ imagePasteGuardRef.current = false; }, 0);
       }
     };
-    const onDragOver = (e: DragEvent) => {
-      const dt = e.dataTransfer; if (!dt) return;
-      const hasFile = Array.from(dt.items || []).some((it)=> it.kind==='file');
-      if (hasFile || dt.getData('text/uri-list')) { e.preventDefault(); dt.dropEffect = 'copy'; }
-    };
-    const onDrop = async (e: DragEvent) => {
-      const dt = e.dataTransfer; if (!dt) return;
-      const files = Array.from(dt.files || []);
-      const images = files.filter(f=> f.type.startsWith('image/'));
-      if (images.length>0) { e.preventDefault(); for (const f of images) await appendImageFromBlob(f, f.name||'dropped.png'); return; }
-      const url = dt.getData('text/uri-list') || dt.getData('text/plain');
-      if (url && /^(https?:|data:)/i.test(url)) { e.preventDefault(); try { const resp = await fetch(url); const blob = await resp.blob(); if (blob.type.startsWith('image/')) await appendImageFromBlob(blob, `dropped-${Date.now()}.${(blob.type.split('/')[1]||'png')}`); } catch { /* noop */ } }
-    };
     el.addEventListener('paste', onPaste as any);
-    el.addEventListener('dragover', onDragOver as any);
-    el.addEventListener('drop', onDrop as any);
     return () => {
       el.removeEventListener('paste', onPaste as any);
-      el.removeEventListener('dragover', onDragOver as any);
-      el.removeEventListener('drop', onDrop as any);
     };
   }, [textareaRef.current]);
 
+  // —— 拖放支持: 图片 + 文档 + 不支持格式提示 ——
+  const supportedDocExtensions = ['pdf', 'docx', 'md', 'markdown', 'txt', 'json', 'csv', 'xlsx', 'xls', 'html', 'htm', 'rtf', 'epub'];
+  const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+
+  const handleDropFiles = async (files: FileList) => {
+    const fileArray = Array.from(files);
+    for (const file of fileArray) {
+      // 图片直接走图片流程
+      if (file.type.startsWith('image/')) {
+        await appendImageFromBlob(file, file.name || 'dropped.png');
+        continue;
+      }
+
+      // 检查文件大小
+      if (file.size > MAX_FILE_SIZE) {
+        toast.error('文件过大', { description: `${file.name} (${Math.round(file.size/1024/1024)}MB) 超过 20MB 限制` });
+        continue;
+      }
+
+      const ext = file.name.toLowerCase().split('.').pop() || '';
+      if (supportedDocExtensions.includes(ext)) {
+        // 受支持的文档类型 -> 走文档解析
+        if (attachedDocument) {
+          toast.error('已有附加文档', { description: '请先移除当前文档后再附加新文档' });
+          continue;
+        }
+        await handleDocumentParsing(file);
+      } else {
+        // 不支持的格式 -> toast 提示
+        toast.error('不支持的文件类型', {
+          description: `"${ext}" 格式暂不支持。支持: ${supportedDocExtensions.join(', ')}`,
+        });
+      }
+    }
+  };
+
   return (
-    <div className="input-area w-full bg-gradient-to-br from-white/40 via-slate-50/30 to-white/40 dark:from-gray-800/80 dark:via-slate-900/70 dark:to-gray-800/80 backdrop-blur-xl shadow-lg rounded-2xl mx-0 mb-4 p-2 sm:p-3 overflow-x-hidden border border-slate-200/40 dark:border-slate-700/40 max-w-full transition-all">
+    <div
+      className="input-area relative w-full bg-gradient-to-br from-white/40 via-slate-50/30 to-white/40 dark:from-gray-800/80 dark:via-slate-900/70 dark:to-gray-800/80 backdrop-blur-xl shadow-lg rounded-2xl mx-0 mb-4 p-2 sm:p-3 overflow-x-hidden border border-slate-200/40 dark:border-slate-700/40 max-w-full transition-all"
+      onDragOver={(e) => {
+        const dt = e.dataTransfer;
+        if (!dt || !dt.items) return;
+        const hasFile = Array.from(dt.items).some(it => it.kind === 'file');
+        if (hasFile) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+          if (!isDragOver) setIsDragOver(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        // 仅在真正离开容器时关闭
+        if (e.currentTarget === e.target || !e.currentTarget.contains(e.relatedTarget as Node)) {
+          setIsDragOver(false);
+        }
+      }}
+      onDrop={async (e) => {
+        e.preventDefault();
+        setIsDragOver(false);
+        const dt = e.dataTransfer;
+        if (!dt || !dt.files || dt.files.length === 0) return;
+        await handleDropFiles(dt.files);
+      }}
+    >
+      {/* 拖放视觉覆盖层 */}
+      {isDragOver && (
+        <div className="absolute inset-0 z-50 rounded-2xl border-2 border-dashed border-blue-400/70 bg-blue-500/10 dark:bg-blue-500/15 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+          <div className="flex flex-col items-center gap-2 text-blue-600 dark:text-blue-400">
+            <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+            </svg>
+            <span className="text-sm font-medium">释放以附加文件</span>
+            <span className="text-xs opacity-70">支持图片、文档 (PDF/DOCX/MD/TXT 等)</span>
+          </div>
+        </div>
+      )}
       {/* 编辑模式提示栏 */}
       {editingMessage && (
         <div className="flex items-center justify-between bg-yellow-50 dark:bg-yellow-900/40 border border-yellow-300 dark:border-yellow-700 text-xs text-yellow-800 dark:text-yellow-200 rounded-md px-3 py-1 mb-2">
@@ -746,7 +803,7 @@ export function ChatInput({
         </div>
       )}
 
-      <div className="relative flex w-full rounded-xl border border-slate-300/50 dark:border-slate-600/50 bg-white dark:bg-slate-900/90 backdrop-blur-sm shadow-sm hover:border-slate-400/60 dark:hover:border-slate-500/60 focus-within:border-blue-400/60 dark:focus-within:border-blue-500/60 focus-within:ring-2 focus-within:ring-blue-100/50 dark:focus-within:ring-blue-900/30 transition-all duration-200" onDragOver={(e)=>{ const dt=(e as React.DragEvent).dataTransfer; if (!dt) return; const hasFile = Array.from(dt.items||[]).some((it)=> it.kind==='file'); if (hasFile || dt.getData('text/uri-list')) { e.preventDefault(); dt.dropEffect='copy'; } }} onDrop={async (e)=>{ const dt=(e as React.DragEvent).dataTransfer; if (!dt) return; const files=Array.from(dt.files||[]); const imgs=files.filter(f=>f.type.startsWith('image/')); if (imgs.length>0){ e.preventDefault(); for (const f of imgs) await appendImageFromBlob(f, f.name||'dropped.png'); return; } const url = dt.getData('text/uri-list')||dt.getData('text/plain'); if (url && /^(https?:|data:)/i.test(url)){ e.preventDefault(); try{ const resp=await fetch(url); const blob=await resp.blob(); if (blob.type.startsWith('image/')) await appendImageFromBlob(blob, `dropped-${Date.now()}.${(blob.type.split('/')[1]||'png')}`);}catch{ /* noop */ }} } }>
+      <div className="relative flex w-full rounded-xl border border-slate-300/50 dark:border-slate-600/50 bg-white dark:bg-slate-900/90 backdrop-blur-sm shadow-sm hover:border-slate-400/60 dark:hover:border-slate-500/60 focus-within:border-blue-400/60 dark:focus-within:border-blue-500/60 focus-within:ring-2 focus-within:ring-blue-100/50 dark:focus-within:ring-blue-900/30 transition-all duration-200">
         {/* 顶部拖拽手柄：按住可向上/下调整高度，封顶 60vh */}
         <div
           className="absolute top-0 left-0 right-0 h-2 cursor-n-resize z-[3]"
