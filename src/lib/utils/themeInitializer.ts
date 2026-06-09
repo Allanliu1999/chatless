@@ -2,6 +2,16 @@ import { StorageUtil } from '../storage';
 
 const THEME_KEY = "app_theme"; // 与GeneralSettings中的键名保持一致
 
+// 主题映射表：主题值 → { darkClass: 'dark'|'light'|'', label: string }
+const THEME_MAP: Record<string, { darkClass: string; label: string }> = {
+  'system':      { darkClass: '',        label: '跟随系统' },
+  'light':       { darkClass: 'light',   label: '亮色(默认)' },
+  'light-warm':  { darkClass: 'light',   label: '暖白' },
+  'dark':        { darkClass: 'dark',    label: '暗色(默认)' },
+  'dark-deep':   { darkClass: 'dark',    label: '深邃黑' },
+  'dark-warm':   { darkClass: 'dark',    label: '暗暖' },
+};
+
 /**
  * 主题初始化服务
  * 在应用启动时立即读取和应用用户的主题偏好设置
@@ -41,7 +51,7 @@ export class ThemeInitializer {
 
   /**
    * 应用主题设置
-   * @param theme 主题类型: "light" | "dark" | "system"
+   * @param theme 主题类型: "system" | "light" | "light-warm" | "dark" | "dark-deep" | "dark-warm"
    */
   static applyTheme(theme: string): void {
     if (typeof document === 'undefined') {
@@ -50,16 +60,21 @@ export class ThemeInitializer {
 
     const root = document.documentElement;
     
+    // 设置 data-theme 属性（用于 CSS 变量级联）
+    root.setAttribute('data-theme', theme);
+
+    // 确定亮暗类
+    const map = THEME_MAP[theme] || { darkClass: '' };
+    
     // 移除现有的主题类
     root.classList.remove("dark", "light");
     
-    // 根据主题设置应用对应的类
-    if (theme === "dark") {
+    if (map.darkClass === 'dark') {
       root.classList.add("dark");
-      console.log('🌙 [ThemeInitializer] 应用暗色主题');
-    } else if (theme === "light") {
+      console.log(`🌙 [ThemeInitializer] 应用暗色主题: ${theme}`);
+    } else if (map.darkClass === 'light') {
       root.classList.add("light");
-      console.log('☀️ [ThemeInitializer] 应用亮色主题');
+      console.log(`☀️ [ThemeInitializer] 应用亮色主题: ${theme}`);
     } else {
       // system 主题：根据系统偏好自动切换
       if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
@@ -106,21 +121,13 @@ export class ThemeInitializer {
   }
 
   /**
-   * 获取当前主题状态
+   * 获取当前主题值
    */
   static getCurrentTheme(): string {
     if (typeof document === 'undefined') {
       return "system";
     }
-
-    const root = document.documentElement;
-    if (root.classList.contains("dark")) {
-      return "dark";
-    } else if (root.classList.contains("light")) {
-      return "light";
-    } else {
-      return "system";
-    }
+    return document.documentElement.getAttribute('data-theme') || "system";
   }
 
   /**
@@ -130,9 +137,7 @@ export class ThemeInitializer {
     if (typeof document === 'undefined') {
       return false;
     }
-
-    const root = document.documentElement;
-    return root.classList.contains("dark");
+    return document.documentElement.classList.contains("dark");
   }
 
   /**
