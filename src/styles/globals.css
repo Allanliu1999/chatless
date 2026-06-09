@@ -123,6 +123,95 @@
 /* We expect the .dark class from next-themes to handle dark mode overrides */
 /* .dark :root { ... } */
 
+/* ===== 多主题扩展: data-theme 属性 ===== */
+
+/* dark-deep: 深邃黑 — 纯黑背景，高对比度 */
+[data-theme="dark-deep"], [data-theme="dark-deep"] .dark {
+  --background: 0 0% 2%;                   /* 近黑背景 */
+  --foreground: 210 40% 96%;               /* 高对比白色 */
+  --card: 0 0% 4%;
+  --card-foreground: 210 40% 96%;
+  --popover: 0 0% 4%;
+  --popover-foreground: 210 40% 96%;
+  --primary: 212.7 26.8% 83.9%;
+  --primary-foreground: 222.2 47.4% 11.2%;
+  --secondary: 217.2 32.6% 12%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217.2 32.6% 10%;
+  --muted-foreground: 215 20.2% 70%;
+  --accent: 217.2 32.6% 12%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 0 0% 12%;
+  --input: 0 0% 12%;
+  --ring: 212.7 26.8% 83.9%;
+  --surface-1: #050505;
+  --surface-2: #0a0a0a;
+  --surface-3: #1a1a1a80;
+  --fg-primary: #e8e8e8;
+  --fg-secondary: #888;
+  --border-subtle: #1a1a1a;
+}
+
+/* dark-warm: 暗暖 — 暖褐暗色，护眼 */
+[data-theme="dark-warm"], [data-theme="dark-warm"] .dark {
+  --background: 30 20% 10%;                 /* 暖褐背景 */
+  --foreground: 30 15% 90%;                 /* 暖白文字 */
+  --card: 30 18% 13%;
+  --card-foreground: 30 15% 90%;
+  --popover: 30 18% 13%;
+  --popover-foreground: 30 15% 90%;
+  --primary: 35 30% 75%;
+  --primary-foreground: 30 20% 10%;
+  --secondary: 30 15% 18%;
+  --secondary-foreground: 30 15% 90%;
+  --muted: 30 15% 16%;
+  --muted-foreground: 30 10% 60%;
+  --accent: 30 15% 18%;
+  --accent-foreground: 30 15% 90%;
+  --destructive: 0 50% 30%;
+  --destructive-foreground: 30 15% 90%;
+  --border: 30 12% 22%;
+  --input: 30 12% 22%;
+  --ring: 35 30% 75%;
+  --surface-1: #1a150f;
+  --surface-2: #2a2218;
+  --surface-3: #3a3022;
+  --fg-primary: #e6ddd0;
+  --fg-secondary: #a69880;
+  --border-subtle: #3a3022;
+}
+
+/* light-warm: 暖白 — 暖色调亮色 */
+[data-theme="light-warm"]:not(.dark), html:not(.dark)[data-theme="light-warm"] {
+  --background: 35 30% 97%;                /* 暖白背景 */
+  --foreground: 30 25% 12%;                /* 暖深灰文字 */
+  --card: 35 25% 99%;
+  --card-foreground: 30 25% 12%;
+  --popover: 35 25% 99%;
+  --popover-foreground: 30 25% 12%;
+  --primary: 30 80% 50%;
+  --primary-foreground: 35 30% 97%;
+  --secondary: 35 20% 92%;
+  --secondary-foreground: 30 25% 12%;
+  --muted: 35 15% 93%;
+  --muted-foreground: 30 10% 40%;
+  --accent: 35 20% 92%;
+  --accent-foreground: 30 25% 12%;
+  --destructive: 0 70% 55%;
+  --destructive-foreground: 35 30% 97%;
+  --border: 35 15% 85%;
+  --input: 35 15% 85%;
+  --ring: 30 80% 50%;
+  --surface-1: #fefcf6;
+  --surface-2: #f5efe6;
+  --surface-3: #e8dfd0;
+  --fg-primary: #2c2418;
+  --fg-secondary: #7a6e5e;
+  --border-subtle: #d9cfbf;
+}
+
 /* Add global font and base background */
 body {
   font-family: "Inter", "Noto Sans SC", "Segoe UI", Helvetica, Arial, sans-serif;
@@ -995,4 +1084,14 @@ li+li { margin-top: 0.375rem; }
 /* Tailwind 动画类 */
 .animate-bounce-wave {
   animation: bounce-wave 1.4s ease-in-out infinite;
+}
+
+/* === 聊天缩略图 (Minimap) 动画 === */
+@keyframes minimap-fade-in {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-minimap-in {
+  animation: minimap-fade-in 0.15s ease-out forwards;
 }
