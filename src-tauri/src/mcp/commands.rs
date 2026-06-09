@@ -17,11 +17,10 @@ use tauri::State;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 use reqwest::Url;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 
-// 仅在Windows平台编译时，引入 CommandExt Trait
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
+// rmcp::transport::ConfigureCommandExt 已提供 creation_flags() 方法
+// 无需额外导入 std::os::windows::process::CommandExt
 
 // —— 工具：从 npx 参数中提取第一个包名（用于首次安装的预拉取） ——
 fn extract_npx_package(args: &Option<Vec<String>>) -> Option<String> {
