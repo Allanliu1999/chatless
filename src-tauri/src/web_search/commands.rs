@@ -71,10 +71,12 @@ pub async fn native_web_search(request: WebSearchRequest) -> Result<Vec<WebSearc
         .map_err(|e| format!("init http client failed: {}", e))?;
       call_ollama_search(&client, request).await
     },
-    // DuckDuckGo / Custom Scraper：优先使用隐秘客户端（减少被风控概率）
-    // 若返回 400 则自动降级为 HTTP/1.1 客户端重试
+    // DuckDuckGo / Custom Scraper：使用隐秘客户端 + POST 表单
+    // 注意：https://html.duckduckgo.com/html/ 要求 POST 方式提交，GET 会返回 400
     "duckduckgo" | "custom_scrape" => {
-      ddg_search_with_fallback(request).await
+      let client = http_client::get_stealth_client()
+        .map_err(|e| format!("init http client failed: {}", e))?;
+      call_custom_scraper(&client, request).await
     },
     other => Err(format!("Unsupported search provider: {}", other)),
   }
@@ -83,17 +85,13 @@ pub async fn native_web_search(request: WebSearchRequest) -> Result<Vec<WebSearc
 #[tauri::command]
 pub async fn native_web_fetch(request: WebFetchRequest) -> Result<WebFetchResult, String> {
   log::info!("[WEB_FETCH] provider={} url={}", request.provider, request.url);
+  let client = http_client::get_stealth_client()
+    .map_err(|e| format!("init http client failed: {}", e))?;
 
   match request.provider.as_str() {
-    "ollama" => {
-      let client = http_client::get_browser_like_client()
-        .map_err(|e| format!("init http client failed: {}", e))?;
-      call_ollama_fetch(&client, request).await
-    },
-    // 其他 provider 暂未提供官方 fetch API，使用降级抓取
-    _ => {
-      fetch_with_fallback(request).await
-    },
+    "ollama" => call_ollama_fetch(&client, request).await,
+    // 其他 provider 暂未提供官方 fetch API，这里提供最简降级实现：直接抓取网页并抽取标题与正文
+    _ => call_basic_fetch(&client, request).await,
   }
 }
 
@@ -301,73 +299,34 @@ async fn call_bing_search(client: &Client, request: WebSearchRequest) -> Result<
   Ok(results)
 }
 
-/// DuckDuckGo 搜索降级策略
-/// 优先使用隐秘客户端，失败时自动切换为 HTTP/1.1 客户端重试
-async fn ddg_search_with_fallback(request: WebSearchRequest) -> Result<Vec<WebSearchResult>, String> {
-  // 尝试1：隐秘客户端（反检测，减少头信息量）
-  match http_client::get_stealth_client() {
-    Ok(client) => {
-      match call_custom_scraper(&client, &request).await {
-        Ok(results) => return Ok(results),
-        Err(e) if e.contains("400") || e.contains("status 400") || e.contains("Status: 400") => {
-          log::warn!("[WEB_SEARCH] stealth client got 400, falling back to http1 client");
-        },
-        Err(e) => return Err(e),
-      }
-    },
-    Err(e) => log::warn!("[WEB_SEARCH] failed to init stealth client: {}", e),
-  }
-
-  // 尝试2：HTTP/1.1 客户端（简化协议，避免 HTTP/2 指纹）
-  match http_client::get_http1_client() {
-    Ok(client) => call_custom_scraper(&client, &request).await,
-    Err(e) => Err(format!("init http1 client failed: {}", e)),
-  }
-}
-
 /// DuckDuckGo 搜索
-/// 说明：当前实现沿用基于 https://html.duckduckgo.com 的解析逻辑，与 `custom_scrape` 一致。
-/// 这样可在无需额外密钥的情况下提供稳定可用的结果。
-/// 若后续需要切换为 duckduckgo crate，可在此处替换为 crate 的调用与结果映射。
+/// 说明：使用 POST 方式提交表单至 https://html.duckduckgo.com/html/
+/// DDG 的 HTML 端点要求 POST，使用 GET 会返回 400。
+/// 参考 ddgs (Python) 库的实现：https://github.com/deedy5/ddgs
 async fn call_duckduckgo_search(client: &Client, request: WebSearchRequest) -> Result<Vec<WebSearchResult>, String> {
   call_custom_scraper(client, request).await
 }
 
-/// Fetch 降级抓取策略
-async fn fetch_with_fallback(request: WebFetchRequest) -> Result<WebFetchResult, String> {
-  // 尝试1：隐秘客户端
-  match http_client::get_stealth_client() {
-    Ok(client) => {
-      match call_basic_fetch(&client, &request).await {
-        Ok(result) => return Ok(result),
-        Err(e) if e.contains("400") || e.contains("status 400") || e.contains("Status: 400") => {
-          log::warn!("[WEB_FETCH] stealth client got 400, falling back to http1 client");
-        },
-        Err(e) => return Err(e),
-      }
-    },
-    Err(e) => log::warn!("[WEB_FETCH] failed to init stealth client: {}", e),
-  }
-
-  // 尝试2：HTTP/1.1 客户端
-  match http_client::get_http1_client() {
-    Ok(client) => call_basic_fetch(&client, &request).await,
-    Err(e) => Err(format!("init http1 client failed: {}", e)),
-  }
-}
-
 async fn call_custom_scraper(client: &Client, request: WebSearchRequest) -> Result<Vec<WebSearchResult>, String> {
-  // 构建 DDG URL（支持 site/kl/kp 等）
+  // DDG HTML 端点要求 POST 表单提交，GET 方式会返回 400
   let mut q = request.query.clone();
   if let Some(site) = request.site.as_ref().filter(|s| !s.trim().is_empty()) { q = format!("site:{} {}", site.trim(), q); }
-  let mut url = format!("https://html.duckduckgo.com/html/?q={}", encode(&q));
-  if let Some(kl) = request.kl.as_ref().filter(|s| !s.trim().is_empty()) { url.push_str(&format!("&kl={}", encode(kl))); }
-  if let Some(safe) = request.safe { let kp = if safe { "1" } else { "-2" }; url.push_str(&format!("&kp={}", kp)); }
-  log::info!("[WEB_SEARCH][scrape] GET {}", url);
-  let mut req = client.get(url);
+
+  log::info!("[WEB_SEARCH][scrape] POST https://html.duckduckgo.com/html/ q={}", q);
+
+  let mut form_data: Vec<(&str, &str)> = vec![("q", &q), ("b", "")];
+  if let Some(kl) = request.kl.as_ref().filter(|s| !s.trim().is_empty()) {
+    form_data.push(("l", kl));
+  }
+
+  let mut req = client.post("https://html.duckduckgo.com/html/")
+    .form(&form_data);
+
+  // Accept-Language 头
   if let Some(lang) = request.accept_language.as_ref().filter(|s| !s.trim().is_empty()) {
     req = req.header("Accept-Language", lang);
   }
+
   let body = req
     .send()
     .await
@@ -525,5 +484,3 @@ pub async fn duckrush_search_api(query: String) -> Result<DuckrushResponse, Stri
     data: DuckrushData { results: items },
   })
 }
-
-
