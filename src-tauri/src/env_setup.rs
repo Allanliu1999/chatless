@@ -1,7 +1,10 @@
-use log::{debug, info, warn, trace};
+// 此模块中的结构体与函数通过 Tauri #[tauri::command] 从前端 invoke 调用，
+// Rust 编译器无法检测到这些调用点，因此允许 dead_code。
+#![allow(dead_code)]
+
+use log::{info, warn, trace};
 use serde::Serialize;
 use std::env;
-use std::ffi::OsStr;
 use std::path::Path;
 
 // ── Cross-platform helpers ─────────────────────────────────────────────────
