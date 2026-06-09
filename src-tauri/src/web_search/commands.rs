@@ -54,18 +54,28 @@ pub struct WebFetchResult {
 #[tauri::command]
 pub async fn native_web_search(request: WebSearchRequest) -> Result<Vec<WebSearchResult>, String> {
   log::info!("[WEB_SEARCH] provider={} query={}", request.provider, request.query);
-  let client = http_client::get_browser_like_client() // 统一走“浏览器头”客户端，兼容更多场景
-    .map_err(|e| format!("init http client failed: {}", e))?;
-  let client_ref: &Client = &client;
 
   match request.provider.as_str() {
-    "google" => call_google_search(client_ref, request).await,
-    "bing" => call_bing_search(client_ref, request).await,
-    "ollama" => call_ollama_search(client_ref, request).await,
-    // DuckDuckGo：默认采用官方html端点解析（无需API Key，鲁棒性强）
-    // 如未来需要，可替换为 duckduckgo crate 的实现
-    "duckduckgo" => call_duckduckgo_search(client_ref, request).await,
-    "custom_scrape" => call_custom_scraper(client_ref, request).await,
+    "google" => {
+      let client = http_client::get_browser_like_client()
+        .map_err(|e| format!("init http client failed: {}", e))?;
+      call_google_search(&client, request).await
+    },
+    "bing" => {
+      let client = http_client::get_browser_like_client()
+        .map_err(|e| format!("init http client failed: {}", e))?;
+      call_bing_search(&client, request).await
+    },
+    "ollama" => {
+      let client = http_client::get_browser_like_client()
+        .map_err(|e| format!("init http client failed: {}", e))?;
+      call_ollama_search(&client, request).await
+    },
+    // DuckDuckGo / Custom Scraper：优先使用隐秘客户端（减少被风控概率）
+    // 若返回 400 则自动降级为 HTTP/1.1 客户端重试
+    "duckduckgo" | "custom_scrape" => {
+      ddg_search_with_fallback(request).await
+    },
     other => Err(format!("Unsupported search provider: {}", other)),
   }
 }
@@ -73,14 +83,17 @@ pub async fn native_web_search(request: WebSearchRequest) -> Result<Vec<WebSearc
 #[tauri::command]
 pub async fn native_web_fetch(request: WebFetchRequest) -> Result<WebFetchResult, String> {
   log::info!("[WEB_FETCH] provider={} url={}", request.provider, request.url);
-  let client = http_client::get_browser_like_client()
-    .map_err(|e| format!("init http client failed: {}", e))?;
-  let client_ref: &Client = &client;
 
   match request.provider.as_str() {
-    "ollama" => call_ollama_fetch(client_ref, request).await,
-    // 其他 provider 暂未提供官方 fetch API，这里提供最简降级实现：直接抓取网页并抽取标题与正文
-    _ => call_basic_fetch(client_ref, request).await,
+    "ollama" => {
+      let client = http_client::get_browser_like_client()
+        .map_err(|e| format!("init http client failed: {}", e))?;
+      call_ollama_fetch(&client, request).await
+    },
+    // 其他 provider 暂未提供官方 fetch API，使用降级抓取
+    _ => {
+      fetch_with_fallback(request).await
+    },
   }
 }
 
@@ -288,12 +301,59 @@ async fn call_bing_search(client: &Client, request: WebSearchRequest) -> Result<
   Ok(results)
 }
 
+/// DuckDuckGo 搜索降级策略
+/// 优先使用隐秘客户端，失败时自动切换为 HTTP/1.1 客户端重试
+async fn ddg_search_with_fallback(request: WebSearchRequest) -> Result<Vec<WebSearchResult>, String> {
+  // 尝试1：隐秘客户端（反检测，减少头信息量）
+  match http_client::get_stealth_client() {
+    Ok(client) => {
+      match call_custom_scraper(&client, &request).await {
+        Ok(results) => return Ok(results),
+        Err(e) if e.contains("400") || e.contains("status 400") || e.contains("Status: 400") => {
+          log::warn!("[WEB_SEARCH] stealth client got 400, falling back to http1 client");
+        },
+        Err(e) => return Err(e),
+      }
+    },
+    Err(e) => log::warn!("[WEB_SEARCH] failed to init stealth client: {}", e),
+  }
+
+  // 尝试2：HTTP/1.1 客户端（简化协议，避免 HTTP/2 指纹）
+  match http_client::get_http1_client() {
+    Ok(client) => call_custom_scraper(&client, &request).await,
+    Err(e) => Err(format!("init http1 client failed: {}", e)),
+  }
+}
+
 /// DuckDuckGo 搜索
 /// 说明：当前实现沿用基于 https://html.duckduckgo.com 的解析逻辑，与 `custom_scrape` 一致。
 /// 这样可在无需额外密钥的情况下提供稳定可用的结果。
 /// 若后续需要切换为 duckduckgo crate，可在此处替换为 crate 的调用与结果映射。
 async fn call_duckduckgo_search(client: &Client, request: WebSearchRequest) -> Result<Vec<WebSearchResult>, String> {
   call_custom_scraper(client, request).await
+}
+
+/// Fetch 降级抓取策略
+async fn fetch_with_fallback(request: WebFetchRequest) -> Result<WebFetchResult, String> {
+  // 尝试1：隐秘客户端
+  match http_client::get_stealth_client() {
+    Ok(client) => {
+      match call_basic_fetch(&client, &request).await {
+        Ok(result) => return Ok(result),
+        Err(e) if e.contains("400") || e.contains("status 400") || e.contains("Status: 400") => {
+          log::warn!("[WEB_FETCH] stealth client got 400, falling back to http1 client");
+        },
+        Err(e) => return Err(e),
+      }
+    },
+    Err(e) => log::warn!("[WEB_FETCH] failed to init stealth client: {}", e),
+  }
+
+  // 尝试2：HTTP/1.1 客户端
+  match http_client::get_http1_client() {
+    Ok(client) => call_basic_fetch(&client, &request).await,
+    Err(e) => Err(format!("init http1 client failed: {}", e)),
+  }
 }
 
 async fn call_custom_scraper(client: &Client, request: WebSearchRequest) -> Result<Vec<WebSearchResult>, String> {
