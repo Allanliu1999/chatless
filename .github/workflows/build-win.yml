@@ -1,0 +1,104 @@
+name: Build Windows Portable
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '指定版本号（如 v0.5.4），留空则使用 package.json 版本'
+        required: false
+        type: string
+        default: ''
+
+# 需要写权限以创建 Release（若需要自动发布）
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Enable corepack and activate pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.4 --activate
+        shell: bash
+
+      - name: Sync version (if specified)
+        if: ${{ github.event.inputs.version != '' }}
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: pnpm run version:set
+        shell: bash
+
+      - name: Install dependencies (前端 & Rust)
+        run: pnpm install --frozen-lockfile
+        shell: bash
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            windows-cargo-
+
+      - name: Build Tauri app (Windows portable - NSIS)
+        run: pnpm tauri build --bundles nsis
+        shell: bash
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: Collect build artifacts
+        run: |
+          mkdir -p artifacts
+
+          # NSIS 安装包 (.exe)
+          if [ -d "src-tauri/target/release/bundle/nsis" ]; then
+            cp src-tauri/target/release/bundle/nsis/*.exe artifacts/ 2>/dev/null || true
+          fi
+
+          # 独立的二进制（便携版的核心）
+          if [ -f "src-tauri/target/release/chatless.exe" ]; then
+            # 复制主程序
+            cp src-tauri/target/release/chatless.exe artifacts/Chatless-Portable.exe
+
+            # 生成 SHA256
+            sha256sum artifacts/Chatless-Portable.exe > artifacts/Chatless-Portable.exe.sha256
+          fi
+
+          echo "=== Artifacts ==="
+          ls -la artifacts/
+        shell: bash
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatless-windows-portable
+          path: artifacts/
+          retention-days: 30
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "=== Package Info ==="
+          echo "Version: $VERSION"
+          echo "Node: $(node --version)"
+          echo "pnpm: $(pnpm --version)"
+          echo "Rust: $(rustc --version)"
+        shell: bash
