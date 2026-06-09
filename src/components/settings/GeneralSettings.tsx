@@ -96,8 +96,11 @@ export function GeneralSettings() {
            label="主题模式"
            options={[
              { value: "system", label: "跟随系统" },
-             { value: "light", label: "亮色" },
-             { value: "dark", label: "暗色" },
+             { value: "light", label: "亮色(默认)" },
+             { value: "light-warm", label: "暖白" },
+             { value: "dark", label: "暗色(默认)" },
+             { value: "dark-deep", label: "深邃黑" },
+             { value: "dark-warm", label: "暗暖" },
            ]}
            value={theme}
            onChange={setTheme}
