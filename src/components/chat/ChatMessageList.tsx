@@ -4,6 +4,7 @@ import { ChatMessage } from './ChatMessage';
 import { VersionedAssistantGroup } from './VersionedAssistantGroup';
 import { Message } from '@/types/chat';
 import { ChatEmptyState } from '@/components/chat/ChatEmptyState';
+import { ChatMinimap } from '@/components/chat/ChatMinimap';
 import FoldingLoader from '@/components/ui/FoldingLoader';
 
 interface ChatMessageListProps {
@@ -25,6 +26,8 @@ interface ChatMessageListProps {
   initialTopMostItemIndex?: number;
   /** 是否应该自动滚动到底部（由父组件的滚动管理逻辑控制） */
   shouldFollowOutput?: boolean;
+  /** 是否显示聊天缩略图 (Minimap) */
+  showMinimap?: boolean;
 }
 
 export function ChatMessageList({
@@ -41,7 +44,11 @@ export function ChatMessageList({
   onRegisterScrollToMessage,
   initialTopMostItemIndex,
   shouldFollowOutput = false,
+  showMinimap = true,
 }: ChatMessageListProps) {
+
+  // Virtuoso 实例引用，用于 Minimap 跳转
+  const virtuosoRef = React.useRef<any>(null);
 
   // 预处理：将版本化消息分组，生成渲染项
   const renderItems = React.useMemo(() => {
@@ -96,7 +103,19 @@ export function ChatMessageList({
   }
 
   return (
-    <div className="flex-1 custom-scrollbar" style={{ overscrollBehavior: 'contain' }}>
+    <div className="flex-1 custom-scrollbar relative" style={{ overscrollBehavior: 'contain' }}>
+      {/* 聊天缩略图 Minimap — 右侧半透明 */}
+      {showMinimap && messages.length > 0 && (
+        <ChatMinimap
+          messages={messages}
+          totalItems={renderItems.length}
+          onScrollToIndex={(index) => {
+            if (virtuosoRef.current && typeof virtuosoRef.current.scrollToIndex === 'function') {
+              virtuosoRef.current.scrollToIndex({ index, align: 'start', behavior: 'auto' });
+            }
+          }}
+        />
+      )}
       <Virtuoso
         totalCount={renderItems.length}
         data={renderItems}
@@ -178,6 +197,9 @@ export function ChatMessageList({
         }}
         style={{ height: '100%' }}
         ref={(instance) => {
+          // 保存给 Minimap 使用
+          virtuosoRef.current = instance;
+
           if (!onRegisterScrollToMessage || !instance) return;
           // 以 any 访问可能存在的 scrollToIndex 方法
           const anyInst: any = instance;
